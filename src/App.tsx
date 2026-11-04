@@ -45,19 +45,64 @@ export default function App() {
   const mountRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<GameEngine | null>(null);
 
-  // Online / Offline Network Connection State
-  const [isOnline, setIsOnline] = useState<boolean>(() => {
-    return typeof navigator !== 'undefined' ? navigator.onLine : true;
-  });
+  // Online / Offline state. Android WebView can report navigator.onLine=true
+  // even when mobile data/Wi-Fi has no internet, so confirm reachability too.
+  const [isOnline, setIsOnline] = useState<boolean>(false);
 
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
+    let disposed = false;
+    let probeInFlight = false;
+
+    const verifyInternet = async () => {
+      if (disposed || probeInFlight) return;
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setIsOnline(false);
+        return;
+      }
+
+      probeInFlight = true;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 2500);
+      try {
+        // A no-cors request is sufficient: success means the request reached
+        // the internet; offline/DNS/network failures reject the fetch.
+        await fetch('https://www.gstatic.com/generate_204', {
+          method: 'GET',
+          mode: 'no-cors',
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+        if (!disposed) setIsOnline(true);
+      } catch {
+        if (!disposed) setIsOnline(false);
+      } finally {
+        window.clearTimeout(timeout);
+        probeInFlight = false;
+      }
+    };
+
+    const handleOnline = () => { void verifyInternet(); };
     const handleOffline = () => setIsOnline(false);
+    const handleVisible = () => {
+      if (document.visibilityState === 'visible') void verifyInternet();
+    };
+
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('focus', handleVisible);
+    document.addEventListener('visibilitychange', handleVisible);
+
+    void verifyInternet();
+    // Android WebView network events are not always delivered consistently.
+    const pollId = window.setInterval(() => { void verifyInternet(); }, 4000);
+
     return () => {
+      disposed = true;
+      window.clearInterval(pollId);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('focus', handleVisible);
+      document.removeEventListener('visibilitychange', handleVisible);
     };
   }, []);
 
@@ -97,6 +142,12 @@ export default function App() {
     isOpen: false,
     type: 'level_complete',
   });
+
+  useEffect(() => {
+    if (!isOnline) {
+      setAdModal((current) => current.isOpen ? { ...current, isOpen: false } : current);
+    }
+  }, [isOnline]);
 
   // Cached local progress for instant first frame
   const initialProgress = useRef<PlayerProgressState>(loadLocalPlayerProgress()).current;
