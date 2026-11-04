@@ -1,4 +1,4 @@
-/**
+ /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -279,12 +279,53 @@ export default function App() {
 
       try {
         // 1. Fetch authoritative cloud player progress from /leaderboard/{uid}
-        const cloudProgress = await fetchCloudPlayerProgress(uid);
         const local = loadLocalPlayerProgress(uid);
+        // A local account cache is a durable offline save. Only compare it with
+        // Firestore when the cache really exists; the default fallback has a
+        // fresh timestamp and must not be mistaken for earned progress.
+        let hasLocalCache = false;
+        try {
+          const cachedRaw = localStorage.getItem(`going_hop_account_${uid}`);
+          if (cachedRaw) {
+            const cached = JSON.parse(cachedRaw);
+            hasLocalCache = Boolean(cached && cached.resetVersion === CURRENT_RESET_VERSION);
+          }
+        } catch {
+          hasLocalCache = false;
+        }
+
+        let cloudProgress: PlayerProgressState | null = null;
+        let cloudReadSucceeded = false;
+        try {
+          cloudProgress = await fetchCloudPlayerProgress(uid);
+          cloudReadSucceeded = true;
+        } catch (cloudReadError) {
+          // Keep the last locally saved progress when offline or temporarily
+          // unable to reach Firestore. Never replace it with clean defaults.
+          console.warn('[App] Cloud progress unavailable; retaining UID-local progress.', cloudReadError);
+        }
 
         let activeProgress: PlayerProgressState;
 
-        if (cloudProgress) {
+        const localIsNewer = Boolean(
+          hasLocalCache &&
+          local.updatedAt > 0 &&
+          (!cloudProgress || local.updatedAt > cloudProgress.updatedAt)
+        );
+
+        if (localIsNewer) {
+          activeProgress = { ...local, resetVersion: CURRENT_RESET_VERSION, profileVersion: PROFILE_SETUP_VERSION };
+          saveLocalPlayerProgress(activeProgress, uid);
+          // Reconcile offline-earned progress to the same authenticated cloud
+          // document when a server read succeeded or a connection is available.
+          if (cloudReadSucceeded) {
+            try {
+              await syncCloudPlayerProgress(uid, activeProgress);
+            } catch (syncError) {
+              console.warn('[App] Local progress retained; cloud reconciliation will retry later.', syncError);
+            }
+          }
+        } else if (cloudProgress) {
           console.log('[App] Authoritative cloud player progress loaded:', cloudProgress);
 
           if (cloudProgress.resetVersion < CURRENT_RESET_VERSION) {
@@ -318,10 +359,23 @@ export default function App() {
             saveLocalPlayerProgress(activeProgress, uid);
           }
         } else {
-          // Fresh account without prior Firestore record
-          console.log(`[App] Fresh account detected for UID ${uid}. Initializing clean progression.`);
-          activeProgress = getDefaultPlayerProgress(local.hasRegisteredProfile ? local : null);
-          saveLocalPlayerProgress(activeProgress, uid);
+          // No cloud record: use an existing local account save if present.
+          // Only a genuinely new account receives clean defaults.
+          if (hasLocalCache) {
+            activeProgress = { ...local, resetVersion: CURRENT_RESET_VERSION, profileVersion: PROFILE_SETUP_VERSION };
+            saveLocalPlayerProgress(activeProgress, uid);
+            if (cloudReadSucceeded) {
+              try {
+                await syncCloudPlayerProgress(uid, activeProgress);
+              } catch (syncError) {
+                console.warn('[App] Could not upload local-first progress yet:', syncError);
+              }
+            }
+          } else {
+            console.log(`[App] Fresh account detected for UID ${uid}. Initializing clean progression.`);
+            activeProgress = getDefaultPlayerProgress(local.hasRegisteredProfile ? local : null);
+            saveLocalPlayerProgress(activeProgress, uid);
+          }
         }
 
         if (!isMounted) return;
@@ -411,6 +465,18 @@ export default function App() {
             const rawLvl = typeof remoteData.maxUnlockedLevel === 'number' ? remoteData.maxUnlockedLevel : typeof remoteData.level === 'number' ? remoteData.level : 1;
             const remoteMaxLevel = Math.max(1, Math.min(LEVELS.length, rawLvl >= 9999 ? 1 : rawLvl));
             const remoteScore = typeof remoteData.score === 'number' ? remoteData.score : 0;
+            const remoteUpdatedAt = typeof remoteData.updatedAt === 'number' ? remoteData.updatedAt : 0;
+            const localProgress = loadLocalPlayerProgress(uid);
+            let localCacheExists = false;
+            try {
+              const raw = localStorage.getItem(`going_hop_account_${uid}`);
+              if (raw) localCacheExists = JSON.parse(raw)?.resetVersion === CURRENT_RESET_VERSION;
+            } catch {
+              localCacheExists = false;
+            }
+            // Ignore stale cloud snapshots while this device has newer offline
+            // progress. Startup reconciliation will upload that local state.
+            if (localCacheExists && localProgress.updatedAt > remoteUpdatedAt) return;
 
             const current = statsRef.current;
             if (remoteGems !== current.totalGems || remoteCoins !== current.totalCoins || remoteMaxLevel !== maxUnlockedLevel) {
@@ -433,6 +499,9 @@ export default function App() {
                 coins: remoteCoins,
                 score: remoteScore,
                 maxUnlockedLevel: remoteMaxLevel,
+                selectedLevel: Math.max(1, Math.min(LEVELS.length, Number(remoteData.selectedLevel) || remoteMaxLevel)),
+                unlockedSkins: Array.isArray(remoteData.unlockedSkins) ? remoteData.unlockedSkins : localProgress.unlockedSkins,
+                selectedSkin: typeof remoteData.selectedSkin === 'string' ? remoteData.selectedSkin : localProgress.selectedSkin,
               }, uid);
             }
           },
@@ -629,6 +698,13 @@ export default function App() {
 
   const syncRef = useRef(syncPlayerScoreToServer);
   syncRef.current = syncPlayerScoreToServer;
+
+  // Once connectivity returns, retry syncing the current UID-scoped local
+  // progress. This also covers a startup where Firestore could not be read.
+  useEffect(() => {
+    if (!isOnline || isAuthLoading || !canonicalPlayerId || !userProfileRef.current) return;
+    void syncRef.current(undefined, undefined, undefined, true);
+  }, [isOnline, isAuthLoading, canonicalPlayerId]);
 
   // Real-time Firestore subscription with automatic deduplication & legacy consolidation
   useEffect(() => {
