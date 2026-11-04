@@ -72,7 +72,15 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   );
 
   return (
-    <div className="absolute inset-0 pointer-events-none select-none overflow-hidden flex flex-col justify-between p-2 sm:p-4 md:p-6 z-10 font-sans">
+    <div
+      className="absolute inset-0 pointer-events-none select-none overflow-hidden flex flex-col justify-between z-10 font-sans"
+      style={{
+        paddingTop: 'max(var(--safe-area-inset-top, env(safe-area-inset-top, 0px)), 8px)',
+        paddingBottom: 'max(var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)), 12px)',
+        paddingLeft: 'max(var(--safe-area-inset-left, env(safe-area-inset-left, 0px)), 8px)',
+        paddingRight: 'max(var(--safe-area-inset-right, env(safe-area-inset-right, 0px)), 8px)',
+      }}
+    >
       {/* Top Section: Header Bar and Compact Scoreboard */}
       <div className="w-full flex flex-col items-center pointer-events-none">
         {/* Top Header Bar */}
