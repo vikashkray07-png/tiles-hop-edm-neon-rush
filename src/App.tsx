@@ -390,7 +390,37 @@ export default function App() {
           }
         );
       } catch (err) {
-        console.warn('[App] Master startup sync note:', err);
+        console.warn('[App] Cloud startup read unavailable; restoring UID-scoped local progress:', err);
+        // Offline/error is NOT the same as a new account. Keep the last local save
+        // and do not write default values to Firestore from this fallback path.
+        const cached = loadLocalPlayerProgress(uid);
+        if (isMounted) {
+          const safeLevel = LEVELS[cached.selectedLevel - 1] || LEVELS[0];
+          setMaxUnlockedLevel(cached.maxUnlockedLevel);
+          setCurrentLevel(safeLevel);
+          currentLevelRef.current = safeLevel;
+          engineRef.current?.setLevel(safeLevel, false);
+          BALL_SKINS.forEach((skin) => { skin.unlocked = cached.unlockedSkins.includes(skin.id); });
+          const cachedSkin = BALL_SKINS.find((skin) => skin.id === cached.selectedSkin) || BALL_SKINS[0];
+          setCurrentSkin(cachedSkin);
+          currentSkinRef.current = cachedSkin;
+          engineRef.current?.setSkin(cachedSkin);
+          const restoredStats: GameStats = {
+            score: 0, totalCumulativeScore: cached.score, coinsEarnedInLevel: 0,
+            totalCoins: cached.coins, totalGems: cached.gems, gemsCollectedInLevel: 0,
+            totalGemsInLevel: safeLevel.totalGems, combo: 0, maxCombo: 0,
+            targetPadsCleared: 0, totalTargetPads: safeLevel.targetPadsCount,
+            currentLevel: safeLevel.id, perfectHits: 0,
+          };
+          setStats(restoredStats);
+          statsRef.current = restoredStats;
+          engineRef.current?.setAuthoritativeStats(restoredStats);
+          if (cached.name && cached.country) {
+            const profile = { name: cached.name, country: cached.country, flag: cached.flag || '🇮🇳' };
+            setUserProfile(profile);
+            userProfileRef.current = profile;
+          }
+        }
       } finally {
         if (isMounted) {
           setIsAuthLoading(false);
@@ -525,7 +555,7 @@ export default function App() {
           updatedAt: now,
         };
 
-        saveLocalPlayerProgress(progressPayload);
+        saveLocalPlayerProgress(progressPayload, uid);
         await syncCloudPlayerProgress(uid, progressPayload);
 
         lastSyncedGemsRef.current = finalGems;
@@ -786,27 +816,10 @@ export default function App() {
         // When Level 2 is completed for the first time, ask user for star review!
         const shouldShowReview = completedLevel.id === 2 && !localStorage.getItem('going_hop_reviewed_v22');
 
-        // When network connection is ON: Show ad immediately after level complete!
-        // When network connection is OFF: Show victory screen directly without ad! NEVER jump to home page!
-        if (typeof navigator !== 'undefined' && navigator.onLine) {
-          setAdModal({
-            isOpen: true,
-            type: 'level_complete',
-            onComplete: () => {
-              setAdModal((prev) => ({ ...prev, isOpen: false }));
-              setPhase('victory');
-              if (shouldShowReview) {
-                setShowReviewModal(true);
-              }
-            },
-          });
-        } else {
-          // Offline mode: Go straight to victory screen with full stats
-          setPhase('victory');
-          if (shouldShowReview) {
-            setShowReviewModal(true);
-          }
-        }
+        // No real ad provider is configured in this project. Never show a fake
+        // interstitial or block level completion behind a demo timer.
+        setPhase('victory');
+        if (shouldShowReview) setShowReviewModal(true);
       },
       onPhaseChange: (newPhase) => {
         setPhase(newPhase);
@@ -995,10 +1008,8 @@ export default function App() {
 
     // Restore legitimate campaign level (NEVER retain level 9999 from Daily Race)
     const local = loadLocalPlayerProgress(canonicalPlayerId);
-    const targetLevelId =
-      local.selectedLevel >= 1 && local.selectedLevel <= maxUnlockedLevel
-        ? local.selectedLevel
-        : maxUnlockedLevel;
+    const targetLevelId = Math.max(1, Math.min(LEVELS.length, maxUnlockedLevel));
+    saveLocalPlayerProgress({ selectedLevel: targetLevelId }, canonicalPlayerId);
     const regularLevel = LEVELS.find((l) => l.id === targetLevelId) || LEVELS[0];
     setCurrentLevel(regularLevel);
     currentLevelRef.current = regularLevel;
@@ -1019,7 +1030,7 @@ export default function App() {
       isDailyChallengeRef.current = false;
       setCurrentLevel(level);
       currentLevelRef.current = level;
-      saveLocalPlayerProgress({ selectedLevel: level.id });
+      saveLocalPlayerProgress({ selectedLevel: level.id }, canonicalPlayerId);
       engineRef.current?.setLevel(level);
       syncRef.current(stats.totalCumulativeScore, maxUnlockedLevel, stats.totalGems);
     }
@@ -1028,7 +1039,7 @@ export default function App() {
   const handleSelectSkin = (skin: BallSkin) => {
     setCurrentSkin(skin);
     currentSkinRef.current = skin;
-    saveLocalPlayerProgress({ selectedSkin: skin.id });
+    saveLocalPlayerProgress({ selectedSkin: skin.id }, canonicalPlayerId);
     engineRef.current?.setSkin(skin);
     syncRef.current(stats.totalCumulativeScore, maxUnlockedLevel, stats.totalGems);
   };
@@ -1077,7 +1088,7 @@ export default function App() {
           saveLocalPlayerProgress({
             unlockedSkins: unlockedList,
             selectedSkin: skin.id,
-          });
+          }, canonicalPlayerId);
           handleSelectSkin(skin);
           soundEngine.playLevelComplete();
         } else {
@@ -1108,25 +1119,15 @@ export default function App() {
         coins: updatedCoins,
         unlockedSkins: unlockedList,
         selectedSkin: skin.id,
-      });
+      }, canonicalPlayerId);
 
       handleSelectSkin(skin);
       soundEngine.playGemCollect();
     };
 
-    if (isOnline) {
-      setAdModal({
-        isOpen: true,
-        type: 'skin_coin_purchase',
-        skin,
-        onComplete: () => {
-          setAdModal((prev) => ({ ...prev, isOpen: false }));
-          grantSkin();
-        },
-      });
-    } else {
-      grantSkin();
-    }
+    // A coin purchase is an in-game transaction, not an ad reward.
+    // Do not gate it behind the fake/demo ad screen.
+    grantSkin();
   };
 
   const handleResetProgression = useCallback(async () => {
@@ -1189,16 +1190,15 @@ export default function App() {
     userProfileRef.current = profile;
     setShowProfileModal(false);
     localStorage.setItem(PROFILE_SETUP_KEY, 'true');
+    const user = await authReady;
+    const uid = auth.currentUser?.uid || user?.uid || canonicalPlayerId;
     saveLocalPlayerProgress({
       name: profile.name,
       country: profile.country,
       flag: profile.flag,
       hasRegisteredProfile: true,
       profileVersion: PROFILE_SETUP_VERSION,
-    });
-
-    const user = await authReady;
-    const uid = auth.currentUser?.uid || user?.uid;
+    }, uid);
     if (uid && auth.currentUser) {
       const curStats = statsRef.current;
       const progressPayload: PlayerProgressState = {
