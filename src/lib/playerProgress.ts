@@ -187,8 +187,11 @@ export async function fetchCloudPlayerProgress(uid: string): Promise<PlayerProgr
       updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : Date.now(),
     };
   } catch (err) {
-    console.warn('[PlayerProgress] fetchCloudPlayerProgress note:', err);
-    return null;
+    // Distinguish a missing Firestore document (null) from an offline/permission error.
+    // Callers must use the UID-scoped local cache on errors and must never treat
+    // a failed network read as a brand-new account.
+    console.warn('[PlayerProgress] Cloud read failed; caller must retain local cache:', err);
+    throw err;
   }
 }
 
