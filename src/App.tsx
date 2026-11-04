@@ -1,4 +1,4 @@
- /**
+/**
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -378,6 +378,28 @@ export default function App() {
           }
         }
 
+        // Keep the saved selection and unlock ceiling consistent. A level that
+        // was successfully selected/played on this account must not appear locked
+        // in the level picker after returning from offline mode.
+        const normalizedSelectedLevel = Math.max(1, Math.min(LEVELS.length, Number(activeProgress.selectedLevel) || 1));
+        const normalizedMaxUnlockedLevel = Math.max(
+          1,
+          Math.min(LEVELS.length, Math.max(Number(activeProgress.maxUnlockedLevel) || 1, normalizedSelectedLevel))
+        );
+        activeProgress = {
+          ...activeProgress,
+          selectedLevel: normalizedSelectedLevel,
+          maxUnlockedLevel: normalizedMaxUnlockedLevel,
+        };
+        saveLocalPlayerProgress(activeProgress, uid);
+        if (cloudReadSucceeded && normalizedMaxUnlockedLevel > (cloudProgress?.maxUnlockedLevel || 1)) {
+          try {
+            await syncCloudPlayerProgress(uid, activeProgress);
+          } catch (syncError) {
+            console.warn('[App] Could not reconcile selected/unlocked level metadata yet:', syncError);
+          }
+        }
+
         if (!isMounted) return;
 
         // Apply active progress to React state
@@ -463,7 +485,8 @@ export default function App() {
             const remoteGems = typeof remoteData.gems === 'number' ? remoteData.gems : 0;
             const remoteCoins = typeof remoteData.coins === 'number' ? remoteData.coins : 0;
             const rawLvl = typeof remoteData.maxUnlockedLevel === 'number' ? remoteData.maxUnlockedLevel : typeof remoteData.level === 'number' ? remoteData.level : 1;
-            const remoteMaxLevel = Math.max(1, Math.min(LEVELS.length, rawLvl >= 9999 ? 1 : rawLvl));
+            const remoteSelectedLevel = Math.max(1, Math.min(LEVELS.length, Number(remoteData.selectedLevel) || 1));
+            const remoteMaxLevel = Math.max(1, Math.min(LEVELS.length, Math.max(rawLvl >= 9999 ? 1 : rawLvl, remoteSelectedLevel)));
             const remoteScore = typeof remoteData.score === 'number' ? remoteData.score : 0;
             const remoteUpdatedAt = typeof remoteData.updatedAt === 'number' ? remoteData.updatedAt : 0;
             const localProgress = loadLocalPlayerProgress(uid);
@@ -1353,7 +1376,7 @@ export default function App() {
 
   return (
     <div 
-      className="relative w-screen h-screen overflow-hidden"
+      className="relative w-screen h-[100dvh] min-h-0 overflow-hidden"
       style={{ background: `linear-gradient(to bottom, ${currentLevel.bgTop}, ${currentLevel.bgBottom})` }}
     >
       {/* Cloud & Auth Syncing Splash Screen */}
