@@ -3,7 +3,6 @@ import { AdMob, AdmobConsentStatus } from '@capacitor-community/admob';
 
 // Google-provided Android test IDs only. Replace only after an adult account
 // owner has completed the required AdMob, store, and privacy setup.
-const TEST_APP_ID = 'ca-app-pub-3940256099942544~3347511713';
 const TEST_REWARDED_ID = 'ca-app-pub-3940256099942544/5224354917';
 const TEST_INTERSTITIAL_ID = 'ca-app-pub-3940256099942544/1033173712';
 
