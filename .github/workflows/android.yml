@@ -2,6 +2,8 @@ name: Build Tiles Hop Android APK
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -57,7 +59,7 @@ jobs:
           xml = manifest.read_text()
           meta = '<meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="@string/admob_app_id" />'
           if "com.google.android.gms.ads.APPLICATION_ID" not in xml:
-              xml = re.sub(r'(<application\\b[^>]*>)', r'\\1\\n        ' + meta, xml, count=1)
+              xml = re.sub(r'(<application\b[^>]*>)', r'\1\n        ' + meta, xml, count=1)
               manifest.write_text(xml)
           values = Path("android/app/src/main/res/values")
           values.mkdir(parents=True, exist_ok=True)
@@ -65,10 +67,10 @@ jobs:
           if strings.exists():
               data = strings.read_text()
               if "name=" + chr(34) + "admob_app_id" not in data:
-                  data = data.replace("</resources>", '    <string name="admob_app_id">ca-app-pub-3940256099942544~3347511713</string>\\n</resources>')
+                  data = data.replace("</resources>", '    <string name="admob_app_id">ca-app-pub-3940256099942544~3347511713</string>\n</resources>')
               strings.write_text(data)
           else:
-              strings.write_text('<?xml version="1.0" encoding="utf-8"?>\\n<resources><string name="admob_app_id">ca-app-pub-3940256099942544~3347511713</string></resources>\\n')
+              strings.write_text('<?xml version="1.0" encoding="utf-8"?>\\n<resources><string name="admob_app_id">ca-app-pub-3940256099942544~3347511713</string></resources>\n')
           PY
 
       - name: Build debug APK
