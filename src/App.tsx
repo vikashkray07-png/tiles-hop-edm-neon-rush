@@ -12,6 +12,7 @@ import { SkinShopModal } from './components/SkinShopModal';
 import { UserProfileModal } from './components/UserProfileModal';
 import { LeaderboardModal } from './components/LeaderboardModal';
 import { AdModal, AdType } from './components/AdModal';
+import { initializeAdMob, showInterstitialTestAd } from './lib/admob';
 import { ReviewModal } from './components/ReviewModal';
 import { DailyChallengeModal } from './components/DailyChallengeModal';
 import { DailyRaceResultsModal } from './components/DailyRaceResultsModal';
@@ -107,6 +108,9 @@ export default function App() {
   }, []);
 
   const [phase, setPhase] = useState<GamePhase>('title');
+
+  // Native Android only: consent-first initialization; browser builds stay ad-free.
+  useEffect(() => { void initializeAdMob(); }, []);
 
   // Modals
   const [showShop, setShowShop] = useState(false);
@@ -966,9 +970,10 @@ export default function App() {
         // When Level 2 is completed for the first time, ask user for star review!
         const shouldShowReview = completedLevel.id === 2 && !localStorage.getItem('going_hop_reviewed_v22');
 
-        // No real ad provider is configured in this project. Never show a fake
-        // interstitial or block level completion behind a demo timer.
+        // A Google interstitial TEST ad may appear at this natural level-complete break.
+        // Failure or web builds never block the victory flow.
         setPhase('victory');
+        void showInterstitialTestAd();
         if (shouldShowReview) setShowReviewModal(true);
       },
       onPhaseChange: (newPhase) => {
