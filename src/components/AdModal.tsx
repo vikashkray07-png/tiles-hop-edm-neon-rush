@@ -21,6 +21,8 @@ export const AdModal: React.FC<AdModalProps> = ({
 }) => {
   const [status, setStatus] = useState<'loading' | 'unavailable' | 'rewarded'>('loading');
   const completedRef = useRef(false);
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -35,7 +37,7 @@ export const AdModal: React.FC<AdModalProps> = ({
         if (earned && !completedRef.current) {
           completedRef.current = true;
           setStatus('rewarded');
-          onComplete();
+          onCompleteRef.current();
         } else {
           setStatus('unavailable');
         }
@@ -48,7 +50,7 @@ export const AdModal: React.FC<AdModalProps> = ({
       cancelled = true;
       mountedRef.current = false;
     };
-  }, [type, onComplete]);
+  }, [type]);
 
   const title = type === 'continue_revive'
     ? 'Rewarded revive'
